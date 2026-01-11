@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bike Sensor Monitor</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Arial', sans-serif;
+      background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      color: #fff;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 2.5em;
+      margin-bottom: 10px;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+    }
+
+    .mqtt-info {
+      text-align: center;
+      margin-bottom: 40px;
+      opacity: 0.8;
+    }
+
+    .sensors-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 30px;
+      margin-top: 30px;
+    }
+
+    .sensor-card {
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      transition: transform 0.3s ease;
+    }
+
+    .sensor-card:hover {
+      transform: translateY(-5px);
+    }
+
+    .sensor-icon {
+      font-size: 60px;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    .sensor-title {
+      font-size: 1.5em;
+      text-align: center;
+      margin-bottom: 20px;
+      font-weight: bold;
+    }
+
+    .status {
+      font-size: 24px;
+      padding: 20px;
+      border-radius: 15px;
+      text-align: center;
+      font-weight: bold;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
+
+    .vibration-detected {
+      background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
+      animation: pulse 1s infinite;
+    }
+
+    .vibration-normal {
+      background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%);
+    }
+
+    .gas-detected {
+      background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+      animation: pulse 1s infinite;
+    }
+
+    .gas-normal {
+      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+      }
+      50% {
+        transform: scale(1.05);
+        box-shadow: 0 6px 25px rgba(0, 0, 0, 0.4);
+      }
+    }
+
+    .connection-status {
+      text-align: center;
+      margin-top: 30px;
+      padding: 15px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      font-size: 14px;
+    }
+
+    .connected {
+      color: #a8e063;
+    }
+
+    .disconnected {
+      color: #ff4b2b;
+    }
+
+    .timestamp {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 12px;
+      opacity: 0.7;
+    }
+
+    @media (max-width: 768px) {
+      h1 {
+        font-size: 1.8em;
+      }
+      
+      .sensors-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <h1>🚴 Bike Sensor Monitor</h1>
+    <div class="mqtt-info">
+      <p> Topic: <b>Smart Helmet</b></p>
+    </div>
+
+    <div class="sensors-grid">
+      <!-- Vibration Sensor Card -->
+      <div class="sensor-card">
+        <div class="sensor-icon">📳</div>
+        <div class="sensor-title">Vibration Sensor</div>
+        <div id="vibration-status" class="status vibration-normal">
+          Bike Crash NOT DETECTED
+        </div>
+      </div>
+
+      <!-- Gas Sensor Card -->
+      <div class="sensor-card">
+        <div class="sensor-icon">💨</div>
+        <div class="sensor-title">Alcohol Sensor (MQ-2)</div>
+        <div id="gas-status" class="status gas-normal">
+          Alcohol Level NORMAL
+        </div>
+      </div>
+    </div>
+
+    <div class="connection-status">
+      Status: <span id="connection-status" class="disconnected">Connecting...</span>
+    </div>
+
+    <div class="timestamp">
+      Last Update: <span id="last-update">--</span>
+    </div>
+  </div>
+
+  <script>
+    // MQTT connection options
+    const options = {
+      connectTimeout: 4000,
+      clientId: 'web_' + Math.random().toString(16).substr(2, 8),
+    };
+
+    // Connect to broker via WebSocket
+    const client = mqtt.connect(
+      'ws://broker.mqttdashboard.com:8000/mqtt',
+      options
+    );
+
+    // Connection event
+    client.on('connect', function () {
+      console.log('Connected to MQTT');
+      document.getElementById('connection-status').textContent = 'Connected';
+      document.getElementById('connection-status').className = 'connected';
+      client.subscribe('SBX');
+    });
+
+    // Variable to track crash detection timeout and counter
+    let crashDetectedTimeout;
+    let vibrationDetectionCount = 0;
+    const VIBRATION_THRESHOLD = 1; // Number of detections needed to trigger alert
+
+    // Message received event
+    client.on('message', function (topic, message) {
+      console.log(topic, message.toString());
+
+      try {
+        const data = JSON.parse(message.toString());
+        const timestamp = new Date().toLocaleTimeString();
+        
+        // Update timestamp
+        document.getElementById('last-update').textContent = timestamp;
+
+        // Update Vibration Status
+        const vibrationDiv = document.getElementById('vibration-status');
+        if (data.VIBRATION === "DETECTED") {
+          // Increment detection counter
+          vibrationDetectionCount++;
+          console.log('Vibration detected. Count: ' + vibrationDetectionCount);
+          
+          // Only show alert if threshold is reached
+          if (vibrationDetectionCount >= VIBRATION_THRESHOLD) {
+            vibrationDiv.textContent = "⚠️ Bike Crash DETECTED!";
+            vibrationDiv.className = "status vibration-detected";
+            
+            // Clear any existing timeout
+            clearTimeout(crashDetectedTimeout);
+            
+            // Set timeout to revert after 3 seconds
+            crashDetectedTimeout = setTimeout(function() {
+              vibrationDiv.textContent = "✅ Bike Crash NOT DETECTED";
+              vibrationDiv.className = "status vibration-normal";
+              vibrationDetectionCount = 0; // Reset counter
+            }, 7000);
+          }
+        } else {
+          // Reset counter when no vibration is detected
+          vibrationDetectionCount = 0;
+          
+          // Only update if no crash is currently being displayed
+          if (!vibrationDiv.classList.contains('vibration-detected')) {
+            vibrationDiv.textContent = "✅ Bike Crash NOT DETECTED";
+            vibrationDiv.className = "status vibration-normal";
+          }
+        }
+
+        // Update Gas Status
+        const gasDiv = document.getElementById('gas-status');
+        if (data.GAS === "DETECTED") {
+          gasDiv.textContent = "⚠️ High Alcohol level DETECTED!";
+          gasDiv.className = "status gas-detected";
+        } else {
+          gasDiv.textContent = " Alcohol Level NORMAL";
+          gasDiv.className = "status gas-normal";
+        }
+
+      } catch (e) {
+        console.error("Invalid JSON", e);
+      }
+    });
+
+    // Error event
+    client.on('error', function (err) {
+      console.error('MQTT Error:', err);
+      document.getElementById('connection-status').textContent = 'Error';
+      document.getElementById('connection-status').className = 'disconnected';
+    });
+
+    // Disconnect event
+    client.on('close', function () {
+      console.log('Disconnected from MQTT');
+      document.getElementById('connection-status').textContent = 'Disconnected';
+      document.getElementById('connection-status').className = 'disconnected';
+    });
+  </script>
+
+</body>
+</html>
